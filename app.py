@@ -2,11 +2,19 @@ import streamlit as st
 import requests
 import pandas as pd
 
-# ページ設定＆タイトル ----------------------------------------------
-st.set_page_config(page_title="Activity Index Explorer", layout="wide")
-st.title("📊 OpenAlex: Activity Index Explorer")
+# ページ設定＆タイトル----------------------------------------------
+st.set_page_config(page_title="Activity Index Explorer", layout="wide", page_icon=":books:",
+                   menu_items={"About":"This tool uses the OpenAlex public data and API to retrieve the number of "
+                                       "papers published by topic and year. Polite Pool is required, "
+                                       "and email address input is mandatory. The definitions of various indices "
+                                       "calculated within the tool are based on the following paper.\n\nRousseau, "
+                                       "Ronald, and Liying Yang. ‘Reflections on the Activity Index and Related "
+                                       "Indicators’. Journal of Informetrics, vol. 6, no. 3, Elsevier BV, July 2012, "
+                                       "pp. 413–421, doi:10.1016/j.joi.2012.01.004.\n\n©️Ren Makishima ("
+                                       "https://github.com/makiren)"})
+st.title("📊 Activity Index Explorer")
 
-#─── キャッシュ付きFetch関数 ───────────────────────────────
+#─── キャッシュ付きフェッシュ関数 ───────────────────────────────
 @st.cache_data
 def fetch_json(url):
     r = requests.get(url)
@@ -58,12 +66,12 @@ def fetch_grouped_counts(filter_params, group_by, mailto):
 #─── UI: サイドバー設定 ─────────────────────────────────────────
 st.sidebar.title("設定")
 # メール必須
-mailto = st.sidebar.text_input("Email (必須)")
+mailto = st.sidebar.text_input("Email (Required)")
 if not mailto:
-    st.sidebar.warning("API利用のため、Email の入力が必須です。")
+    st.sidebar.warning("Type your Email address to include in API requests. Not stored for any other purpose.")
     st.stop()
 # 国コード入力
-dcountries = st.sidebar.text_input("Country Codes (CSV)", "JP")
+dcountries = st.sidebar.text_input("Country Codes(comma separated)", "JP,US,FR,DE")
 # グローバルデータ含めるか
 include_global = st.sidebar.checkbox("Include Global Data", value=False)
 # 年度レンジ
@@ -146,17 +154,7 @@ if st.sidebar.button("Run"):
                 df["AI"] = (df["s"]/df["t"]) / (df["v"]/df["w"])
                 results.append(df[["topic","country","year","s","t","v","w","AI"]])
         ai_df = pd.concat(results, ignore_index=True).sort_values(["topic","country","year"])
-    st.success("完了！🎉")
-    with st.expander("ℹ️ Info", expanded=False):
-        st.markdown(
-            """
-This tool uses the OpenAlex public data and API to retrieve the number of papers published by topic and year. Polite Pool is required, and email address input is mandatory. The definitions of various indices calculated within the tool are based on the following paper.
-
-Rousseau, Ronald, and Liying Yang. ‘Reflections on the Activity Index and Related Indicators’. Journal of Informetrics, vol. 6, no. 3, Elsevier BV, July 2012, pp. 413–421, doi:10.1016/j.joi.2012.01.004.
-
-©️Ren Makishima (https://github.com/makiren)
-            """
-        )
+    st.success("Data fetched！🎉")
     st.dataframe(ai_df)
     csv = ai_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "activity_index.csv", "text/csv")
