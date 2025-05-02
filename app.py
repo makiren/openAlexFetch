@@ -2,14 +2,16 @@ import streamlit as st
 import requests
 import pandas as pd
 
+# ページ設定＆タイトル ----------------------------------------------
+st.set_page_config(page_title="Activity Index Explorer", layout="wide")
+st.title("📊 OpenAlex: Activity Index Explorer")
 
-# ─── キャッシュ付きフェッチ関数 ───────────────────────────────
+#─── キャッシュ付きFetch関数 ───────────────────────────────
 @st.cache_data
 def fetch_json(url):
     r = requests.get(url)
     r.raise_for_status()
     return r.json()
-
 
 @st.cache_data
 def get_all_topics(mailto):
@@ -38,120 +40,113 @@ def get_all_topics(mailto):
         page += 1
     return pd.concat(df_list, ignore_index=True)
 
-
 @st.cache_data
 def fetch_grouped_counts(filter_params, group_by, mailto):
     """
     /works?filter=...&group_by=... の結果を key,count のDataFrameで返す。
     """
     url = (
-            "https://api.openalex.org/works"
-            f"?filter={filter_params}"
-            f"&group_by={group_by}&per_page=200"
-            + (f"&mailto={mailto}" if mailto else "")
+        "https://api.openalex.org/works"
+        f"?filter={filter_params}"
+        f"&group_by={group_by}&per_page=200"
+        + (f"&mailto={mailto}" if mailto else "")
     )
     j = fetch_json(url)
     df = pd.DataFrame(j.get("group_by", []))[["key", "count"]]
     return df.assign(key=df["key"].astype(str))
 
-
-# ─── UI ──────────────────────────────────────────────────────────────
+#─── UI: サイドバー設定 ─────────────────────────────────────────
 st.sidebar.title("設定")
-
-# 必須メール入力
+# メール必須
 mailto = st.sidebar.text_input("Email (必須)")
 if not mailto:
     st.sidebar.warning("API利用のため、Email の入力が必須です。")
     st.stop()
-
-countries = st.sidebar.text_input("Country Codes (CSV)", "JP")
-
-# トピック一覧取得 (メール必須後)
-topics_df = get_all_topics(mailto)
-st.sidebar.write(f"Loaded {len(topics_df)} topics")
-
-# トピック選択 UI
-selected = st.sidebar.multiselect(
-    "Select Topics",
-    options=topics_df["id"],
-    format_func=lambda x: topics_df.loc[topics_df.id == x, "display_name"].iloc[0]
-)
-
-# 選択トピックの Description 表示
-if selected:
-    with st.sidebar.expander("Topic Descriptions", expanded=False):
-        for tid in selected:
-            label = topics_df.loc[topics_df.id == tid, "display_name"].iloc[0]
-            desc = topics_df.loc[topics_df.id == tid, "description"].iloc[0]
-            st.markdown(f"**{label}**: {desc}")
-
+# 国コード入力
+dcountries = st.sidebar.text_input("Country Codes (CSV)", "JP")
+# グローバルデータ含めるか
+include_global = st.sidebar.checkbox("Include Global Data", value=False)
 # 年度レンジ
 year0, year1 = st.sidebar.slider("Year Range", 1990, 2025, (2000, 2025))
 
+# トピック一覧を取得
+topics_df = get_all_topics(mailto)
+st.sidebar.write(f"Loaded {len(topics_df)} topics")
+
+#─── UI: メイン画面 ─────────────────────────────────────────────
+st.header("Select Topics")
+selected = st.multiselect(
+    "Topics",
+    options=topics_df["id"],
+    format_func=lambda x: topics_df.loc[topics_df.id == x, "display_name"].iloc[0]
+)
+# 選択トピックの説明表示
+if selected:
+    st.subheader("Topic Descriptions")
+    for tid in selected:
+        name = topics_df.loc[topics_df.id == tid, "display_name"].iloc[0]
+        desc = topics_df.loc[topics_df.id == tid, "description"].iloc[0]
+        st.markdown(f"**{name}**: {desc}")
+
+#─── データ取得＆表示 ───────────────────────────────────────────
 if st.sidebar.button("Run"):
-    results = []
-    for C in [c.strip() for c in countries.split(",")]:
-        for tid in selected:
-            name = topics_df.loc[topics_df.id == tid, "display_name"].iloc[0]
+    # 国コードリスト準備
+    codes_list = [c.strip() for c in dcountries.split(",") if c.strip()]
+    if include_global:
+        codes_list.append("")
 
-            # s(C,F,Y)
-            s_df = fetch_grouped_counts(
-                filter_params=(
-                    f"type:article,"
-                    f"authorships.countries:countries/{C},"
-                    f"publication_year:{year0}-{year1},"
+    with st.spinner("Fetching data..."):
+        results = []
+        for C in codes_list:
+            for tid in selected:
+                name = topics_df.loc[topics_df.id == tid, "display_name"].iloc[0]
+                # ベースフィルター
+                base_filters = [
+                    "type:article",
+                    f"publication_year:{year0}-{year1}",
                     f"primary_topic.id:{tid}"
-                ),
-                group_by="publication_year",
-                mailto=mailto
-            ).rename(columns={"count": "s", "key": "year"})
-
-            # t(C,Y)
-            t_df = fetch_grouped_counts(
-                filter_params=(
-                    f"type:article,"
-                    f"authorships.countries:countries/{C},"
-                    f"publication_year:{year0}-{year1}"
-                ),
-                group_by="publication_year",
-                mailto=mailto
-            ).rename(columns={"count": "t", "key": "year"})
-
-            # v(F,Y)
-            v_df = fetch_grouped_counts(
-                filter_params=(
-                    f"type:article,"
-                    f"publication_year:{year0}-{year1},"
-                    f"primary_topic.id:{tid}"
-                ),
-                group_by="publication_year",
-                mailto=mailto
-            ).rename(columns={"count": "v", "key": "year"})
-
-            # w(Y)
-            w_df = fetch_grouped_counts(
-                filter_params=f"type:article,publication_year:{year0}-{year1}",
-                group_by="publication_year",
-                mailto=mailto
-            ).rename(columns={"count": "w", "key": "year"})
-
-            # 結合＆AI計算
-            df = (
-                s_df.merge(t_df, on="year")
-                .merge(v_df, on="year")
-                .merge(w_df, on="year")
-                .assign(country=C, topic=name)
-            )
-            df["AI"] = (df["s"] / df["t"]) / (df["v"] / df["w"])
-            results.append(df[["topic", "country", "year", "s", "t", "v", "w", "AI"]])
-
-    ai_df = pd.concat(results, ignore_index=True)
-    # 年昇順ソート
-    ai_df = ai_df.sort_values(["topic", "country", "year"])
-
+                ]
+                # s(C,F,Y)
+                s_filters = base_filters.copy()
+                if C:
+                    s_filters.insert(1, f"authorships.countries:countries/{C}")
+                s_df = fetch_grouped_counts(
+                    filter_params=",".join(s_filters),
+                    group_by="publication_year",
+                    mailto=mailto
+                ).rename(columns={"count":"s","key":"year"})
+                # t(C,Y)
+                t_filters = ["type:article", f"publication_year:{year0}-{year1}"]
+                if C:
+                    t_filters.insert(1, f"authorships.countries:countries/{C}")
+                t_df = fetch_grouped_counts(
+                    filter_params=",".join(t_filters),
+                    group_by="publication_year",
+                    mailto=mailto
+                ).rename(columns={"count":"t","key":"year"})
+                # v(F,Y)
+                v_df = fetch_grouped_counts(
+                    filter_params=",".join(base_filters),
+                    group_by="publication_year",
+                    mailto=mailto
+                ).rename(columns={"count":"v","key":"year"})
+                # w(Y)
+                w_df = fetch_grouped_counts(
+                    filter_params=f"type:article,publication_year:{year0}-{year1}",
+                    group_by="publication_year",
+                    mailto=mailto
+                ).rename(columns={"count":"w","key":"year"})
+                # 結合＆AI計算
+                df = (
+                    s_df.merge(t_df,on="year")
+                        .merge(v_df,on="year")
+                        .merge(w_df,on="year")
+                        .assign(country=C or "Global", topic=name)
+                )
+                df["AI"] = (df["s"]/df["t"]) / (df["v"]/df["w"])
+                results.append(df[["topic","country","year","s","t","v","w","AI"]])
+        ai_df = pd.concat(results, ignore_index=True).sort_values(["topic","country","year"])
     st.success("完了！🎉")
-
-    # インフォメーション
     with st.expander("ℹ️ Info", expanded=False):
         st.markdown(
             """
@@ -160,15 +155,8 @@ This tool uses the OpenAlex public data and API to retrieve the number of papers
 Rousseau, Ronald, and Liying Yang. ‘Reflections on the Activity Index and Related Indicators’. Journal of Informetrics, vol. 6, no. 3, Elsevier BV, July 2012, pp. 413–421, doi:10.1016/j.joi.2012.01.004.
 
 ©️Ren Makishima (https://github.com/makiren)
-"""
+            """
         )
-
     st.dataframe(ai_df)
-
     csv = ai_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", csv, "activity_index.csv", "text/csv")
-
-# requirements.txt
-# streamlit
-# pandas
-# requests
